@@ -17,11 +17,11 @@ from utils.transformers import *
 class TorchDS(data_utils.Dataset):
  
   def __init__(self, feats, target):
-    x=feats.values
-    y=target.values
+    #x=feats.values
+    #y=target.values
  
-    self.x_ds=torch.tensor(x,dtype=torch.float32)
-    self.y_ds=torch.tensor(y,dtype=torch.float32)
+    self.x_ds=torch.as_tensor(feats.values,dtype=torch.float32)
+    self.y_ds=torch.as_tensor(target,dtype=torch.float32)
  
   def __len__(self):
     return len(self.y_ds)
@@ -36,10 +36,10 @@ class NeuralNetwork(nn.Module):
         super(NeuralNetwork, self).__init__()
         self.linear_relu_stack = nn.Sequential(
             nn.Linear(input_vars, params['n_unit_l1']),
-            nn.ReLU(),
-            nn.Linear(params['n_unit_l1'], 1)#, params['n_unit_l2']),
-            #nn.ReLU(),
-            #nn.Linear(params['n_unit_l2'], params['n_unit_l3']),
+            nn.LeakyReLU(),
+            nn.Linear(params['n_unit_l1'], params['n_unit_l2']),
+            nn.LeakyReLU(),
+            nn.Linear(params['n_unit_l2'], 1),
             #nn.ReLU(),
             #nn.Linear(params['n_unit_l3'], 1)
         )
@@ -228,7 +228,8 @@ def train_and_evaluate(params):
     ])
 
     pipe_target = Pipeline(steps=[
-        ('log_transform', FunctionTransformer(np.log, inverse_func = np.exp, check_inverse = True))
+        ('log_transform', FunctionTransformer(np.log, inverse_func = np.exp, check_inverse = True)),
+        ('scaler', StandardScaler())
     ])
 
     features = df_train.drop(columns=['target'])
@@ -242,16 +243,19 @@ def train_and_evaluate(params):
     cv_val_rmse_values = []
     
     print('Parameters Being Tested:\n')
-    print(params)
+    for key,value in params.items():
+        print('{}:{}\n'.format(key, value))
     
     for train_index, val_index in kf.split(features, target):
         # Creates the train features and target datasets for the fold
         train_feats_fold = features.iloc[train_index]
         train_target_fold = target.iloc[train_index]
 
+        train_target_fold = train_target_fold
+
         # Creates the validation features and target dataset for the fold
         val_feats_fold = features.iloc[val_index]
-        val_target_fold = target.iloc[val_index]
+        val_target_fold = target.iloc[val_index].values
 
         # Fit transforms the features train dataset and use that to transform the features validation dataset
         train_feats_fold = pipe_features.fit_transform(train_feats_fold)
@@ -277,7 +281,9 @@ def train_and_evaluate(params):
 
         error_fn = nn.MSELoss()
 
-        optimizer = getattr(optim, params['optimizer'])(model.parameters(), lr= params['lr'], weight_decay=params['L2'])
+        #optimizer = getattr(optim, params['optimizer'])(model.parameters(), lr= params['lr'], weight_decay=params['L2'])
+
+        optimizer = optim.AdamW(model.parameters(), lr=params['lr'], weight_decay=params['L2'])
 
         num_epochs = params['epochs']
         train_rmse_values = []
@@ -303,7 +309,7 @@ def train_and_evaluate(params):
                     vpred_log = model(vX)
 
                     # Transforms back to normal scale
-                    vpred = pipe_target.inverse_transform(vpred_log)
+                    vpred = torch.as_tensor(pipe_target.inverse_transform(vpred_log))
 
                     vrmse = torch.sqrt(error_fn(vpred, vy))
                     running_vrmse += vrmse.item()
@@ -328,13 +334,13 @@ def train_and_evaluate(params):
 def objective(trial):
 
     params = {
-              'lr': trial.suggest_float('lr', 5e-2, 1e-1),
-              'optimizer': trial.suggest_categorical("optimizer", ["SGD", "Adam"]),
-              'n_unit_l1': trial.suggest_int("n_unit_l1", 42, 168, step=21),
-              #'n_unit_l2': trial.suggest_int("n_unit_l2", 42, 84, step=21),
-              'epochs': trial.suggest_int("epochs", 150, 400, step=50),
-              'L2': trial.suggest_float('L2', 1e-3, 1e-1),
-              'batch_size': trial.suggest_int("batch_size", 500, 1000, step=100)
+              'lr': trial.suggest_float('lr', 1e-3, 1e-1),
+              #'optimizer': trial.suggest_categorical("optimizer", ["SGD", "Adam"]),
+              'n_unit_l1': trial.suggest_int("n_unit_l1", 189, 336, step=21),
+              'n_unit_l2': trial.suggest_int("n_unit_l2", 63, 168, step=21),
+              'epochs': trial.suggest_int("epochs", 30, 80, step=10),
+              'L2': trial.suggest_float('L2', 1e-1, 5),
+              'batch_size': trial.suggest_int("batch_size", 200, 2000, step=200)
               }
     
     cv_val_rmse = train_and_evaluate(params)
@@ -342,7 +348,7 @@ def objective(trial):
     return cv_val_rmse
 
 study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler())
-study.optimize(objective, n_trials=200) 
+study.optimize(objective, n_trials=200)
 
 best_trial = study.best_trial
 
@@ -351,4 +357,4 @@ for key, value in best_trial.params.items():
 
 df_trials = study.trials_dataframe().sort_values(by=['value'], ascending=True)
 
-df_trials.to_csv('hyperparameter_opt_ex2.csv', index=False)
+df_trials.to_csv('hyperparameter_opt_trial_2.csv', index=False)

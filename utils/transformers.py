@@ -7,6 +7,7 @@ from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA
 import numpy as np
 import pandas as pd
+from category_encoders.target_encoder import TargetEncoder
 
 
 class KMeansClusterer(BaseEstimator, TransformerMixin):
@@ -48,7 +49,8 @@ class GaussianClusterer(BaseEstimator, TransformerMixin):
         
         self.gaussian = GaussianMixture(
             n_components=self.n_clusters,
-            means_init=self.initial_centroids)
+            means_init=self.initial_centroids,
+            random_state=1)
         
         self.gaussian.fit(X[self.features_cluster])
         return self
@@ -136,7 +138,28 @@ class AmenitiesCounter(BaseEstimator, TransformerMixin):
             ]
         X_new.drop(columns=['property_amenities'], inplace=True)
         return X_new
+
+class MaxGuestsAdjuster(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y=None):
+        return self
     
+    def transform(self, X, y=None):
+        X_new = X.copy()
+
+        X_new['property_max_guests'] = np.where(
+            X_new.property_max_guests < X_new.property_beds,
+            X_new.property_beds,
+            X_new.property_max_guests)
+        X_new['property_max_guests'] = np.where(
+            X_new.property_max_guests > 2*X_new.property_beds,
+            2*X_new.property_beds,
+            X_new.property_max_guests)
+        
+        return X_new
+
 class HostVerificationsCounter(BaseEstimator, TransformerMixin):
     def __init__(self):
         pass
@@ -168,7 +191,9 @@ class ExtrasHandler(BaseEstimator, TransformerMixin):
         list_items = [
             ['host_is_superhost', 'Host Is Superhost'],
             ['is_location_exact', 'Is Location Exact'],
-            ['is_instant_bookable', 'Instant Bookable']
+            ['is_instant_bookable', 'Instant Bookable'],
+            ['host_is_verified', 'Host Identity Verified'],
+            ['host_has_profile_pic', 'Host Has Profile Pic']
             ]
 
         for item in list_items:
@@ -221,14 +246,13 @@ class BookingCancelHandler(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         X_new = X.copy()
 
-        X_new['booking_cancel_policy_new'] = [
-            1 
-            if 'strict' in i 
-            else 0 
+        X_new['booking_cancel_policy'] = [
+            i 
+            if 'strict' not in i 
+            else 'strict' 
             for i in X_new['booking_cancel_policy']
             ]
         
-        X_new.drop(columns=['booking_cancel_policy'], inplace=True)
         return X_new
 
 class CustomOneHotEncoder(BaseEstimator, TransformerMixin):
@@ -248,6 +272,49 @@ class CustomOneHotEncoder(BaseEstimator, TransformerMixin):
         feature_names = self.encoder.get_feature_names_out(self.columns)
         X_new[feature_names] = self.encoder.transform(X_new[self.columns]).toarray()
         X_new.drop(columns=self.columns, inplace=True)
+        
+        return X_new
+
+class CustomTruncator(BaseEstimator, TransformerMixin):
+    def __init__(self, cols_and_lims):
+        self.cols_and_lims = cols_and_lims
+        
+    def fit(self, X, y=None):
+        return self
+        
+    def transform(self, X):
+        X_new = X.copy()
+        for item in self.cols_and_lims.items():
+            if X_new[item[0]].min() >= 1:
+                bins = [i if i < item[1] else i+50 for i in range(item[1] + 1)]
+                labels = [str(i+1) if i < item[1]-1 else str(i+1)+'+' for i in range(item[1])]
+
+                X_new[item[0]] = pd.cut(X_new[item[0]], bins=bins, labels=labels)
+            else:
+                bins = [i-1 if i < item[1] else i+50 for i in range(item[1] + 2)]
+                labels = [str(i) if i < item[1] else str(i)+'+' for i in range(item[1]+1)]
+
+                X_new[item[0]] = pd.cut(X_new[item[0]], bins=bins, labels=labels)
+                
+        return X_new
+ 
+class CustomTargetEncoder(BaseEstimator, TransformerMixin):
+    def __init__(self, feat_columns, target_column):
+        self.feat_columns = feat_columns
+        self.target_column = target_column
+        
+    def fit(self, X, y=None):
+        self.target_enc = TargetEncoder(
+            cols=self.feat_columns,
+            min_samples_leaf=100,
+            smoothing=100)
+        self.target_enc.fit(X, X[self.target_column])
+        return self
+        
+    def transform(self, X):
+        X_new = X.copy()
+        temp = self.target_enc.transform(X_new)
+        X_new[self.feat_columns] = temp[self.feat_columns]
         
         return X_new
 
@@ -273,31 +340,59 @@ class CustomStandardScaler(BaseEstimator, TransformerMixin):
         return X_new
     
 class CustomIterativeImputer(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        pass
+    def __init__(self, columns=None):
+        self.columns = columns
 
-    def fit(self, X, y=None):  
+    def fit(self, X, y=None):
+        if self.columns is None:
+            self.columns = list(X.columns)
+
         self.imputer = IterativeImputer()
 
-        self.imputer.fit(X)
+        self.imputer.fit(X[self.columns])
         return self
 
     def transform(self, X):
         X_new = X.copy()
-        X_new[list(X.columns)] = self.imputer.transform(X_new)
+        X_new[self.columns] = self.imputer.transform(X_new[self.columns])
         return X_new
+
 
 class CustomSimpleImputer(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        pass
+    def __init__(self, strategy='median',columns=None):
+        self.columns = columns
+        self.strategy = strategy
 
-    def fit(self, X, y=None):  
-        self.imputer = SimpleImputer()
+    def fit(self, X, y=None):
+        if self.columns is None:
+            self.columns = list(X.columns)
 
-        self.imputer.fit(X)
+        self.imputer = SimpleImputer(strategy=self.strategy)
+
+        self.imputer.fit(X[self.columns])
         return self
 
     def transform(self, X):
         X_new = X.copy()
-        X_new[list(X.columns)] = self.imputer.transform(X_new)
+        X_new[self.columns] = self.imputer.transform(X_new[self.columns])
         return X_new
+    
+
+class TargetHandler(BaseEstimator, TransformerMixin):
+    def __init__(self, target_col):
+        self.target_col = target_col
+
+    def fit(self, X, y=None):  
+        return self
+
+    def transform(self, X):
+        X_new = X.copy()
+        
+        X_new[self.target_col] = np.log(X_new[self.target_col])
+        scaler = StandardScaler()
+        X_new[self.target_col] = scaler.fit_transform(X_new[[self.target_col]])
+
+        X_new[self.target_col] = np.where(X_new[self.target_col] >= 2, 2, np.where(X_new[self.target_col] <= -2, -2, X_new[self.target_col]))
+        return X_new
+
+

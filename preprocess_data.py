@@ -87,7 +87,8 @@ pipe_features = Pipeline(steps=[
         columns=[
             'property_type_new',
             'property_room_type',
-            'location_zone_g'
+            'location_zone_g',
+            'booking_cancel_policy'
             ]
         )
      ),
@@ -135,7 +136,7 @@ pipe_features = Pipeline(steps=[
             'reviews_value'
         ]
      )),
-    ('lgbm', LGBMRegressor(reg_lambda = 10, reg_alpha=10, learning_rate=0.01))
+    ('lgbm', LGBMRegressor(reg_lambda = 10, reg_alpha=10, learning_rate=0.01, objetive='quantile'))
 ])
 
 pipe_target = Pipeline(steps=[
@@ -149,6 +150,8 @@ model = TransformedTargetRegressor(regressor=pipe_features, transformer=pipe_tar
 cv = KFold(n_splits=10)
 scores = cross_val_score(pipe_features, X_train, y_train, scoring='neg_root_mean_squared_error', cv=cv, n_jobs=-1)
 
+cv2 = KFold(n_splits=10)
+scores2 = cross_val_score(model, X, y, scoring='neg_median_absolute_error', cv=cv2, n_jobs=-1)
 
 dummy_pred = np.array([np.median(y) for i in range(len(y_val))])
 
@@ -282,6 +285,9 @@ pipe_target2 = Pipeline(steps=[
 ])
 
 model2 = TransformedTargetRegressor(regressor=pipe_features2, transformer=pipe_target2)
+
+cv2 = KFold(n_splits=10)
+scores2 = cross_val_score(model2, X, y, scoring='neg_root_mean_squared_error', cv=cv2, n_jobs=-1)
 
 cv2 = KFold(n_splits=10)
 scores2 = cross_val_score(model2, X, y, scoring='neg_root_mean_squared_error', cv=cv2, n_jobs=-1)
